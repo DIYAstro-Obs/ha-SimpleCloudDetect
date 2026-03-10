@@ -1,0 +1,40 @@
+configuration:
+  device_name:
+    name: "Device Name"
+    description: "The name of the entity in Home Assistant."
+  camera_url:
+    name: "Camera URL"
+    description: "The URL to the current image of your All-Sky Camera (e.g., http://192.168.1.10/image.jpg)."
+  verify_ssl:
+    name: "Verify SSL"
+    description: "Validate the SSL certificate of your camera URL."
+  mqtt_broker:
+    name: "MQTT Broker"
+    description: "Hostname of your MQTT broker (usually 'core-mosquitto')."
+  mqtt_port:
+    name: "MQTT Port"
+    description: "Port of your MQTT broker (default: 1883)."
+  mqtt_user:
+    name: "MQTT Username"
+    description: "Optional: Your Home Assistant / MQTT username."
+  mqtt_password:
+    name: "MQTT Password"
+    description: "Optional: Your Home Assistant / MQTT password."
+  mqtt_topic:
+    name: "MQTT Topic"
+    description: "Base topic where the state is published (e.g., simpleclouddetect/state)."
+  mqtt_discovery_prefix:
+    name: "MQTT Discovery Prefix"
+    description: "Prefix for Home Assistant Auto-Discovery (default: homeassistant)."
+  scan_interval:
+    name: "Scan Interval (Seconds)"
+    description: "How often should a new image be fetched and analyzed?"
+  safe_wait_time:
+    name: "Safe Wait Time (Seconds)"
+    description: "Only switch to SAFE if the sky is clear for this many seconds in a row."
+  unsafe_wait_time:
+    name: "Unsafe Wait Time (Seconds)"
+    description: "Only switch to UNSAFE if clouds are detected for this many seconds in a row."
+  safe_conditions:
+    name: "Safe Conditions (Important!)"
+    description: "Type and press Enter to add safe cloud labels. Valid options are: 'Clear', 'Wisps', 'Overcast', 'Rain'."

@@ -1,0 +1,40 @@
+configuration:
+  device_name:
+    name: "Gerätename"
+    description: "Der Name des Sensors in Home Assistant."
+  camera_url:
+    name: "Kamera URL"
+    description: "Der direkte Link zum aktuellen Bild deiner All-Sky Kamera (z.B. http://192.168.1.10/image.jpg)."
+  verify_ssl:
+    name: "SSL Überprüfen"
+    description: "Überprüft das SSL Zertifikat der Kamera-URL."
+  mqtt_broker:
+    name: "MQTT Broker"
+    description: "Hostname deines MQTT Brokers (meistens 'core-mosquitto')."
+  mqtt_port:
+    name: "MQTT Port"
+    description: "Port deines MQTT Brokers (Standard: 1883)."
+  mqtt_user:
+    name: "MQTT Benutzername"
+    description: "Optional: Dein Home Assistant / MQTT Login."
+  mqtt_password:
+    name: "MQTT Passwort"
+    description: "Optional: Dein Home Assistant / MQTT Passwort."
+  mqtt_topic:
+    name: "MQTT Topic"
+    description: "Basis-Topic, auf dem der Status gesendet wird (z.B. simpleclouddetect/state)."
+  mqtt_discovery_prefix:
+    name: "MQTT Auto-Discovery Präfix"
+    description: "Der Präfix für die Home Assistant Auto-Erkennung (Standard: homeassistant)."
+  scan_interval:
+    name: "Scan-Intervall (Sekunden)"
+    description: "Wie oft soll das Kamerabild abgerufen und von der KI analysiert werden?"
+  safe_wait_time:
+    name: "Safe Wartezeit (Sekunden)"
+    description: "Erst auf SICHER wechseln, wenn der Himmel für diese Dauer wolkenfrei (laut KI) war."
+  unsafe_wait_time:
+    name: "Unsafe Wartezeit (Sekunden)"
+    description: "Erst auf UNSICHER wechseln, wenn Wolken für diese Dauer ununterbrochen erkannt wurden."
+  safe_conditions:
+    name: "Sichere Zustände (Wichtig!)"
+    description: "Tippe das Label ein und drücke Enter, um es zuzuweisen. Erlaubte Eingaben: 'Clear', 'Wisps', 'Overcast', 'Rain'."

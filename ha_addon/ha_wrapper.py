@@ -324,6 +324,7 @@ def main():
     scan_interval = int(options.get("scan_interval", 60))
     safe_wait_time = int(options.get("safe_wait_time", 300))
     unsafe_wait_time = int(options.get("unsafe_wait_time", 0))
+    safe_conditions = options.get("safe_conditions", ["Clear", "Wisps"])
     device_name = options.get("device_name", "Cloud Detector")
     verify_ssl = options.get("verify_ssl", False)
     
@@ -425,11 +426,12 @@ def main():
             # 2. Extract and format values for our extra logic
             status = result.get("class_name", "Unknown").strip()
             
-            # 'is_safe' is True if "Clear" or "Wisps", False if overcast/rain
+            # 'is_safe' is True if the current status matches any of the user's selected safe_conditions
             lower_status = status.lower()
             is_safe = False
-            for safe_label in ["clear", "wisps", "0 clear", "1 wisps"]:
-                if safe_label in lower_status:
+            for safe_label in safe_conditions:
+                # E.g., user selected "Clear", and status is "0 Clear" or "Clear"
+                if safe_label.lower() in lower_status:
                     is_safe = True
                     break
             
