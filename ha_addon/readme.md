@@ -1,46 +1,55 @@
 # Simple Cloud Detect MQTT - Home Assistant Add-on
 
-This add-on brings the AI-based cloud detection from [DiMoGro1/simpleCloudDetect](https://github.com/DiMoGro1/simpleCloudDetect) natively to Home Assistant. It analyzes images from your All-Sky camera and reports the safety status ("Safe" or "Unsafe") via MQTT to Home Assistant.
+This add-on integrates the AI-based cloud detection from [chvvkumar/simpleCloudDetect](https://github.com/chvvkumar/simpleCloudDetect) into Home Assistant. It analyzes images from your All-Sky camera and reports the safety status ("Safe" or "Unsafe") via MQTT.
 
 ## Features
 
-- 🧠 **AI Analysis**: Automatic classification (Clear, Wisps, Overcast, Rain) using TensorFlow/Keras models.
-- 🎨 **Sleek WebUI (Ingress)**: A dedicated dashboard directly in the HA sidebar with live images and glassmorphism design.
-- 🔍 **Detail View**: Click on the camera image in the dashboard to enlarge it in a high-resolution modal view.
-- 🛡️ **Specialized Safety Sensor**: A dedicated binary logic sensor (`is_safe`) that classifies "Clear" and "Wisps" as safe.
-- ⏱️ **Adjustable Wait Times**:
-  - `Safe Wait Time`: Delay when switching to "Safe" (prevents flickering during short cloud gaps).
-  - `Unsafe Wait Time`: Immediate reporting when clouds or rain are detected.
-- 🔗 **MQTT Auto-Discovery**: Automatically recognizes sensors in Home Assistant without manual YAML configuration.
+- **AI Analysis**: Classification (Clear, Wisps, Overcast, Rain) using TensorFlow/Keras models.
+- **WebUI (Ingress)**: A dashboard accessible via the Home Assistant sidebar showing live images.
+- **Image View**: Click on the camera image in the dashboard to enlarge it in a modal view.
+- **Safety Sensor**: A binary sensor (`is_safe`) classifies "Clear" and "Wisps" as safe.
+- **Configurable Wait Times**:
+  - `Safe Wait Time`: Delay when switching to "Safe" state.
+  - `Unsafe Wait Time`: Delay when switching to "Unsafe" state.
+- **MQTT Discovery**: Internal sensors are automatically recognized by Home Assistant.
 
 ## Installation
 
-The easiest way to install this add-on is by adding this GitHub repository directly to your Home Assistant instance:
+To install this add-on, add this GitHub repository to your Home Assistant instance:
 
-1. In your Home Assistant UI, navigate to **Settings -> Add-ons -> Add-on Store**.
+1. In Home Assistant, navigate to **Settings -> Add-ons -> Add-on Store**.
 2. Click the three dots in the top right corner and select **Repositories**.
-3. Add the URL of this GitHub repository: `https://github.com/DiMoGro1/simpleCloudDetect`
-4. Close the dialog and the store will refresh.
-5. Search for **Simple Cloud Detect MQTT** and click **Install**.
+3. Add the URL: `https://github.com/DiMoGro1/simpleCloudDetect`
+4. Close the dialog and search for **Simple Cloud Detect MQTT**.
+5. Click **Install**.
 
 ## Configuration
 
-Configure the add-on via the **Configuration** tab in the add-on interface:
+Options are available under the **Configuration** tab:
 
-- `camera_url`: The full HTTP(S) URL to your All-Sky camera snapshot.
-- `device_name`: Device name in Home Assistant (Default: "Cloud Detector").
-- `scan_interval`: Interval in seconds between AI analyses (Default: 60s).
-- `safe_wait_time`: Time in seconds the sky must be continuously clear before the sensor switches to "Safe" (True) (Default: 300s).
-- `unsafe_wait_time`: Time in seconds before switching to "Unsafe" when clouds are detected (Default: 0s for immediate protection).
-- `mqtt_discovery_prefix`: Prefix for Home Assistant Auto-Discovery (Default: "homeassistant").
+- `camera_url`: URL for your camera snapshot.
+- `device_name`: Name for the device in Home Assistant (Default: "Cloud Detector").
+- `scan_interval`: Time in seconds between analyses (Default: 60s).
+- `safe_wait_time`: Seconds the sky must be clear before switching to "Safe" (Default: 300s).
+- `unsafe_wait_time`: Seconds before switching to "Unsafe" when clouds are detected (Default: 0s).
+- `mqtt_discovery_prefix`: Prefix for Auto-Discovery (Default: "homeassistant").
 
-## Dashboard & Ingress
+## Dashboard
 
-Enable the **"Show in sidebar"** toggle in the add-on settings to pin the dashboard to the left menu. Here you can see:
-- The last image analyzed by the AI.
-- The current safety status in real-time.
-- The estimated AI confidence score.
+Enable the **"Show in sidebar"** toggle in the add-on settings to access the dashboard. 
+
+## Custom Models
+
+You can use your own AI models by replacing the default files. 
+
+1. Install a file access add-on (e.g., **Samba share**, **File Editor**, or **SSH & Web Terminal**).
+2. Navigate to the Home Assistant `share` folder.
+3. Locate the `simple_cloud_detect` directory.
+4. Replace the following files with your own:
+   - `keras_model.h5`: Your Keras model file.
+   - `labels.txt`: Your labels file.
+5. Restart the add-on to load the new model.
 
 ## Technical Details
 
-The add-on uses an internal lightweight HTTP server on port `8099` to ensure Ingress compatibility. The models (`keras_model.h5` and `labels.txt`) are automatically copied to `/share/simple_cloud_detect/` during the first start, where they can be replaced with custom models if desired.
+The add-on uses an internal HTTP server on port `8099` for Ingress. Default models are copied to `/share/simple_cloud_detect/` during the first startup if the directory is empty.
