@@ -1,5 +1,5 @@
 name: "Simple Cloud Detect MQTT"
-version: "0.21"
+version: "0.15"
 slug: "simple_cloud_detect_mqtt"
 description: "AI-based cloud detection that publishes safety status to MQTT."
 url: "https://github.com/DiMoGro1/simpleCloudDetect"

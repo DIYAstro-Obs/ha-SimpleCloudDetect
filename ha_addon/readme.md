@@ -7,11 +7,13 @@ This add-on integrates the AI-based cloud detection from [chvvkumar/simpleCloudD
 - **AI Analysis**: Classification (Clear, Wisps, Overcast, Rain) using TensorFlow/Keras models.
 - **WebUI (Ingress)**: A dashboard accessible via the Home Assistant sidebar showing live images.
 - **Image View**: Click on the camera image in the dashboard to enlarge it in a modal view.
-- **Safety Sensor**: A binary sensor (`is_safe`) classifies "Clear" and "Wisps" as safe.
+- **Safety Sensor**: A binary sensor (`is_safe`) classifies the sky status.
+- **Configurable Safe States**: Choose exactly which AI classes (e.g., Clear, Wisps) trigger the "Safe" status.
 - **Configurable Wait Times**:
   - `Safe Wait Time`: Delay when switching to "Safe" state.
   - `Unsafe Wait Time`: Delay when switching to "Unsafe" state.
 - **MQTT Discovery**: Internal sensors are automatically recognized by Home Assistant.
+- **Translated UI**: Fully translated configuration fields within the Home Assistant UI (English & German).
 
 ## Installation
 
@@ -32,6 +34,7 @@ Options are available under the **Configuration** tab:
 - `scan_interval`: Time in seconds between analyses (Default: 60s).
 - `safe_wait_time`: Seconds the sky must be clear before switching to "Safe" (Default: 300s).
 - `unsafe_wait_time`: Seconds before switching to "Unsafe" when clouds are detected (Default: 0s).
+- `safe_conditions`: A list of AI classes considered "Safe". Type the class name and press Enter. Valid options: `Clear`, `Wisps`, `Overcast`, `Rain`.
 - `mqtt_discovery_prefix`: Prefix for Auto-Discovery (Default: "homeassistant").
 
 ## Dashboard
