@@ -1,0 +1,43 @@
+name: "Simple Cloud Detect MQTT"
+version: "0.15"
+slug: "simple_cloud_detect_mqtt"
+description: "AI-based cloud detection that publishes safety status to MQTT."
+url: "https://github.com/DiMoGro1/simpleCloudDetect"
+arch:
+  - amd64
+  - aarch64
+startup: services
+boot: auto
+init: false
+ingress: true
+ingress_port: 8099
+panel_icon: "mdi:weather-cloudy"
+panel_title: "Cloud Detect"
+map:
+  - share:rw
+options:
+  device_name: "Cloud Detector"
+  camera_url: ""
+  verify_ssl: false
+  mqtt_broker: "core-mosquitto"
+  mqtt_port: 1883
+  mqtt_user: ""
+  mqtt_password: ""
+  mqtt_topic: "simpleclouddetect/state"
+  mqtt_discovery_prefix: "homeassistant"
+  scan_interval: 60
+  safe_wait_time: 300
+  unsafe_wait_time: 0
+schema:
+  device_name: str
+  camera_url: str
+  verify_ssl: bool
+  mqtt_broker: str
+  mqtt_port: port
+  mqtt_user: str?
+  mqtt_password: password?
+  mqtt_topic: str
+  mqtt_discovery_prefix: str
+  scan_interval: int
+  safe_wait_time: int
+  unsafe_wait_time: int
