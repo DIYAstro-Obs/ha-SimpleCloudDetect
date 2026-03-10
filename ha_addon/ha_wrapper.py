@@ -403,6 +403,7 @@ def main():
     reported_is_safe = None
     current_condition = None
     condition_start_time = 0
+    last_logged_wait_state = None
     
     while True:
         try:
@@ -454,9 +455,16 @@ def main():
                             str(reported_is_safe).lower()
                         )
                         logger.info(f"Published Is Safe state to MQTT: {reported_is_safe}")
+                last_logged_wait_state = None # Reset log state once published
             else:
+              # If time hasn't passed, we don't publish yet.
                 remaining = int(wait_time - (now - condition_start_time))
-                logger.info(f"Delaying state publish... {remaining}s remaining for {'Safe' if is_safe else 'Unsafe'} state.")
+                if remaining > 0:
+                    if last_logged_wait_state != is_safe:
+                        logger.info(f"Delaying state publish... waiting for {'Safe' if is_safe else 'Unsafe'} state to stabilize.")
+                        last_logged_wait_state = is_safe
+                else:
+                    last_logged_wait_state = None
             
             # Update WebUI global state
             with STATE_LOCK:
