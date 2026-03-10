@@ -33,6 +33,7 @@ GLOBAL_STATE = {
     "time": "0.0",
     "last_update": "System initializing"
 }
+STATE_LOCK = threading.Lock()
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
@@ -240,7 +241,9 @@ class WebUIHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps(GLOBAL_STATE).encode('utf-8'))
+                with STATE_LOCK:
+                    state_json = json.dumps(GLOBAL_STATE)
+                self.wfile.write(state_json.encode('utf-8'))
             elif path == 'latest.jpg':
                 img_path = SHARE_DIR / "latest.jpg"
                 if img_path.exists():
@@ -454,11 +457,12 @@ def main():
                 logger.info(f"Delaying state publish... {remaining}s remaining for {'Safe' if is_safe else 'Unsafe'} state.")
             
             # Update WebUI global state
-            GLOBAL_STATE["status"] = result.get("class_name", "Unknown")
-            GLOBAL_STATE["is_safe"] = is_safe
-            GLOBAL_STATE["confidence"] = result.get("confidence_score", 0.0)
-            GLOBAL_STATE["time"] = result.get("Detection Time (Seconds)", 0.0)
-            GLOBAL_STATE["last_update"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            with STATE_LOCK:
+                GLOBAL_STATE["status"] = result.get("class_name", "Unknown")
+                GLOBAL_STATE["is_safe"] = is_safe
+                GLOBAL_STATE["confidence"] = result.get("confidence_score", 0.0)
+                GLOBAL_STATE["time"] = result.get("Detection Time (Seconds)", 0.0)
+                GLOBAL_STATE["last_update"] = time.strftime("%Y-%m-%d %H:%M:%S")
             
         except Exception as e:
             logger.error(f"Error during detection loop: {e}")
