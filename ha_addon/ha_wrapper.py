@@ -527,7 +527,7 @@ def main():
     if detector.ha_discovery and detector.mqtt_client:
         device_info = detector.ha_discovery.get_device_info()
         safety_config = {
-            "name": "Is Safe (Clear/Wisps)",
+            "name": "Is Safe",
             "unique_id": f"clouddetect_{device_id}_is_safe",
             "state_topic": f"{mqtt_discovery_prefix}/sensor/clouddetect_{device_id}/is_safe/state",
             "availability_topic": detector.ha_discovery.availability_topic,
