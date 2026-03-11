@@ -235,15 +235,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const container = document.getElementById('labelsContainer');
             container.innerHTML = '';
             labels.forEach(label => {
-                const isSafe = safeConditions.some(
-                    sc => label.toLowerCase().includes(sc.toLowerCase())
+                // safeConditions is now a list of {label, threshold} objects
+                const matchingSc = safeConditions.find(
+                    sc => typeof sc === 'object'
+                        ? label.toLowerCase().includes(sc.label.toLowerCase())
+                        : label.toLowerCase().includes(sc.toLowerCase())
                 );
+                const isSafe = !!matchingSc;
+                const threshold = isSafe && typeof matchingSc === 'object' ? matchingSc.threshold : null;
                 const row = document.createElement('div');
                 row.className = 'label-row';
                 row.innerHTML = `
                     <span class="label-name">${label}</span>
-                    <span class="label-badge ${isSafe ? 'label-safe' : 'label-unsafe'}">
-                        ${isSafe ? 'SAFE' : 'UNSAFE'}
+                    <span style="display:flex;align-items:center;gap:8px;">
+                        ${isSafe && threshold !== null ? `<span style="font-size:0.75rem;color:#aaa;">\u2265${threshold}%</span>` : ''}
+                        <span class="label-badge ${isSafe ? 'label-safe' : 'label-unsafe'}">
+                            ${isSafe ? 'SAFE' : 'UNSAFE'}
+                        </span>
                     </span>`;
                 container.appendChild(row);
             });
@@ -437,7 +445,8 @@ def main():
     scan_interval = int(options.get("scan_interval", 60))
     safe_wait_time = int(options.get("safe_wait_time", 300))
     unsafe_wait_time = int(options.get("unsafe_wait_time", 0))
-    safe_conditions = options.get("safe_conditions", ["Clear"])
+    # safe_conditions is now a list of dicts: [{"label": "Clear", "threshold": 50}, ...]
+    safe_conditions = options.get("safe_conditions", [{"label": "Clear", "threshold": 50}])
     device_name = options.get("device_name", "Cloud Detector")
     verify_ssl = options.get("verify_ssl", False)
     
@@ -496,16 +505,17 @@ def main():
             clean_labels.append(lbl)
     with STATE_LOCK:
         GLOBAL_STATE["labels"] = clean_labels
-        GLOBAL_STATE["safe_conditions"] = safe_conditions
+        GLOBAL_STATE["safe_conditions"] = safe_conditions  # list of {label, threshold} dicts
 
-    # Warn if none of the safe_conditions match any label
+    # Warn if none of the safe_conditions labels match any model label
+    safe_labels_only = [sc["label"] for sc in safe_conditions if isinstance(sc, dict)]
     matched = any(
-        any(sc.lower() in lbl.lower() for sc in safe_conditions)
+        any(sc.lower() in lbl.lower() for sc in safe_labels_only)
         for lbl in clean_labels
     )
     if not matched:
         logger.warning(
-            f"None of the configured safe_conditions {safe_conditions} match "
+            f"None of the configured safe_conditions {safe_labels_only} match "
             f"any label in labels.txt {clean_labels}. "
             "If you use a custom model, please update 'safe_conditions' in the add-on configuration!"
         )
@@ -567,13 +577,21 @@ def main():
             
             # 2. Extract and format values for our extra logic
             status = result.get("class_name", "Unknown").strip()
+            confidence = result.get("confidence_score", 0.0)  # already in percent (0-100)
             
-            # 'is_safe' is True if the current status matches any of the user's selected safe_conditions
+            # 'is_safe' is True if the current status matches a safe_condition label
+            # AND the confidence score meets or exceeds that label's threshold.
             lower_status = status.lower()
             is_safe = False
-            for safe_label in safe_conditions:
-                # E.g., user selected "Clear", and status is "0 Clear" or "Clear"
-                if safe_label.lower() in lower_status:
+            for sc in safe_conditions:
+                if isinstance(sc, dict):
+                    safe_label = sc.get("label", "")
+                    threshold = sc.get("threshold", 50)
+                else:
+                    # Fallback for plain strings (shouldn't happen after migration)
+                    safe_label = sc
+                    threshold = 50
+                if safe_label.lower() in lower_status and confidence >= threshold:
                     is_safe = True
                     break
             

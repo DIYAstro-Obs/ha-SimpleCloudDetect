@@ -33,7 +33,8 @@ options:
   safe_wait_time: 300
   unsafe_wait_time: 0
   safe_conditions:
-    - "Clear"
+    - label: "Clear"
+      threshold: 50
 schema:
   device_name: str
   camera_entity: str?
@@ -49,4 +50,5 @@ schema:
   safe_wait_time: int
   unsafe_wait_time: int
   safe_conditions:
-    - str
+    - label: str
+      threshold: int
