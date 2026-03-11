@@ -11,6 +11,7 @@ from pathlib import Path
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import paho.mqtt.client as mqtt
+import requests
 
 # We will import CloudDetector and Config after adjusting the sys.path in main()
 
@@ -278,23 +279,52 @@ def load_options():
             "scan_interval": 60
         }
 
+def download_file(url, destination):
+    """Download a file from an URL to a destination path"""
+    try:
+        logger.info(f"Downloading {url} to {destination}...")
+        response = requests.get(url, timeout=30, stream=True)
+        response.raise_for_status()
+        with open(destination, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        logger.info(f"Successfully downloaded {destination}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to download {url}: {e}")
+        return False
+
 def ensure_models():
     """Ensure Keras model and labels exist in HA's /share directory"""
     SHARE_DIR.mkdir(parents=True, exist_ok=True)
     
-    model_dest = SHARE_DIR / "keras_model.h5"
-    if not model_dest.exists():
-        logger.info(f"Copying default keras_model.h5 to {model_dest}")
-        shutil.copy2(APP_DIR / "keras_model.h5", model_dest)
-    else:
-        logger.info(f"Using existing model at {model_dest}")
+    # Base URLs for downloads
+    REPO_RAW_URL = "https://raw.githubusercontent.com/chvvkumar/simpleCloudDetect/main"
+    
+    files_to_check = [
+        ("keras_model.h5", f"{REPO_RAW_URL}/keras_model.h5"),
+        ("labels.txt", f"{REPO_RAW_URL}/labels.txt")
+    ]
+    
+    for filename, download_url in files_to_check:
+        dest_path = SHARE_DIR / filename
+        app_path = APP_DIR / filename
         
-    label_dest = SHARE_DIR / "labels.txt"
-    if not label_dest.exists():
-        logger.info(f"Copying default labels.txt to {label_dest}")
-        shutil.copy2(APP_DIR / "labels.txt", label_dest)
-    else:
-        logger.info(f"Using existing labels at {label_dest}")
+        if dest_path.exists():
+            logger.info(f"Using existing {filename} at {dest_path}")
+            continue
+            
+        # If not in /share, try to copy from /app
+        if app_path.exists():
+            logger.info(f"Copying default {filename} from {app_path} to {dest_path}")
+            shutil.copy2(app_path, dest_path)
+        else:
+            # If not in /app, download from GitHub
+            logger.info(f"{filename} not found in {APP_DIR}. Attempting download...")
+            if not download_file(download_url, dest_path):
+                logger.error(f"Could not ensure {filename} exists!")
+                # We don't exit here, maybe the user manually places it or it's a transient network error
+                # detect.py will fail later anyway if the file is missing when loading the model
 
 def main():
     logger.info("Starting simpleCloudDetect Native Home Assistant Add-on Wrapper")
