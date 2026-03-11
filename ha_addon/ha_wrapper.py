@@ -97,30 +97,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .safe { background: rgba(46, 204, 113, 0.2); color: #2ecc71; border: 1px solid #2ecc71; }
         .unsafe { background: rgba(231, 76, 60, 0.2); color: #e74c3c; border: 1px solid #e74c3c; }
+        
         .countdown-container {
-            margin-top: 14px;
+            margin-top: 5px;
+            margin-bottom: 20px;
             display: none;
         }
         .countdown-label {
-            font-size: 0.82rem;
+            font-size: 0.9rem;
             color: #bbb;
-            margin-bottom: 6px;
             text-align: center;
         }
-        .countdown-bar-bg {
-            width: 100%;
-            height: 8px;
-            background: rgba(255,255,255,0.1);
-            border-radius: 999px;
-            overflow: hidden;
-        }
-        .countdown-bar-fill {
-            height: 100%;
-            border-radius: 999px;
-            transition: width 4.8s linear;
-        }
-        .fill-safe   { background: linear-gradient(90deg, #2ecc71, #27ae60); }
-        .fill-unsafe { background: linear-gradient(90deg, #e74c3c, #c0392b); }
         .grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -215,9 +202,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         <div id="countdownContainer" class="countdown-container">
             <div id="countdownLabel" class="countdown-label"></div>
-            <div class="countdown-bar-bg">
-                <div id="countdownFill" class="countdown-bar-fill fill-safe" style="width:100%"></div>
-            </div>
         </div>
         
         <div class="grid">
@@ -306,20 +290,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         badge.innerText = 'UNSAFE';
                     }
 
-                    // Countdown bar
+                    // Countdown text logic
                     const cdContainer = document.getElementById('countdownContainer');
                     const cdLabel     = document.getElementById('countdownLabel');
-                    const cdFill      = document.getElementById('countdownFill');
+                    
                     if (data.is_pending && data.countdown_total > 0) {
-                        const pct = Math.max(0, Math.min(100,
-                            (data.countdown_remaining / data.countdown_total) * 100
-                        ));
                         const target = data.pending_target === 'safe' ? 'SAFE' : 'UNSAFE';
                         const secs   = Math.ceil(data.countdown_remaining);
                         cdLabel.innerText = `Wechsel zu ${target} in ${secs}s …`;
-                        cdFill.className  = 'countdown-bar-fill ' +
-                            (data.pending_target === 'safe' ? 'fill-safe' : 'fill-unsafe');
-                        cdFill.style.width = pct + '%';
                         cdContainer.style.display = 'block';
                     } else {
                         cdContainer.style.display = 'none';
