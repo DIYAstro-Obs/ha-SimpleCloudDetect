@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 OPTIONS_PATH = "/data/options.json"
 SHARE_DIR = Path("/share/simple_cloud_detect")
+TMP_IMAGE_PATH = Path("/tmp/latest.jpg")  # RAM-based, no SD card writes
 APP_DIR = Path("/app")
 
 # Global state for WebUI
@@ -246,7 +247,7 @@ class WebUIHandler(BaseHTTPRequestHandler):
                     state_json = json.dumps(GLOBAL_STATE)
                 self.wfile.write(state_json.encode('utf-8'))
             elif path == 'latest.jpg':
-                img_path = SHARE_DIR / "latest.jpg"
+                img_path = TMP_IMAGE_PATH
                 if img_path.exists():
                     self.send_response(200)
                     self.send_header('Content-type', 'image/jpeg')
@@ -463,10 +464,10 @@ def main():
             # Pass return_image=True so we can save and serve it
             result = detector.detect(return_image=True)
             
-            # Save latest image to disk for the WebUI
+            # Save latest image to RAM (/tmp) for the WebUI - avoids SD card writes
             if 'image' in result:
                 try:
-                    result['image'].save(SHARE_DIR / "latest.jpg", "JPEG")
+                    result['image'].save(TMP_IMAGE_PATH, "JPEG")
                 except Exception as e:
                     logger.error(f"Failed to save latest image: {e}")
                 # Remove it before publishing over MQTT
