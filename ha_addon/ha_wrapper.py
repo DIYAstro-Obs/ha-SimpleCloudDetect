@@ -588,6 +588,7 @@ def main():
             "state_topic": f"{mqtt_discovery_prefix}/sensor/clouddetect_{device_id}/is_safe/state",
             "availability_topic": detector.ha_discovery.availability_topic,
             "icon": "mdi:shield-check",
+            "force_update": True,
             "device": device_info
         }
         detector.mqtt_client.publish(
