@@ -35,7 +35,11 @@ GLOBAL_STATE = {
     "time": "0.0",
     "last_update": "System initializing",
     "labels": [],
-    "safe_conditions": []
+    "safe_conditions": [],
+    "countdown_remaining": 0,
+    "countdown_total": 0,
+    "is_pending": False,
+    "pending_target": None
 }
 STATE_LOCK = threading.Lock()
 
@@ -93,6 +97,30 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .safe { background: rgba(46, 204, 113, 0.2); color: #2ecc71; border: 1px solid #2ecc71; }
         .unsafe { background: rgba(231, 76, 60, 0.2); color: #e74c3c; border: 1px solid #e74c3c; }
+        .countdown-container {
+            margin-top: 14px;
+            display: none;
+        }
+        .countdown-label {
+            font-size: 0.82rem;
+            color: #bbb;
+            margin-bottom: 6px;
+            text-align: center;
+        }
+        .countdown-bar-bg {
+            width: 100%;
+            height: 8px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 999px;
+            overflow: hidden;
+        }
+        .countdown-bar-fill {
+            height: 100%;
+            border-radius: 999px;
+            transition: width 4.8s linear;
+        }
+        .fill-safe   { background: linear-gradient(90deg, #2ecc71, #27ae60); }
+        .fill-unsafe { background: linear-gradient(90deg, #e74c3c, #c0392b); }
         .grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -184,6 +212,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <img id="feed" class="camera-feed" src="latest.jpg" alt="Camera Feed" title="Click to enlarge">
         </div>
         <div id="statusBadge" class="status-badge safe">Loading...</div>
+
+        <div id="countdownContainer" class="countdown-container">
+            <div id="countdownLabel" class="countdown-label"></div>
+            <div class="countdown-bar-bg">
+                <div id="countdownFill" class="countdown-bar-fill fill-safe" style="width:100%"></div>
+            </div>
+        </div>
         
         <div class="grid">
             <div class="stat-box">
@@ -270,7 +305,26 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         badge.className = 'status-badge unsafe';
                         badge.innerText = 'UNSAFE';
                     }
-                    
+
+                    // Countdown bar
+                    const cdContainer = document.getElementById('countdownContainer');
+                    const cdLabel     = document.getElementById('countdownLabel');
+                    const cdFill      = document.getElementById('countdownFill');
+                    if (data.is_pending && data.countdown_total > 0) {
+                        const pct = Math.max(0, Math.min(100,
+                            (data.countdown_remaining / data.countdown_total) * 100
+                        ));
+                        const target = data.pending_target === 'safe' ? 'SAFE' : 'UNSAFE';
+                        const secs   = Math.ceil(data.countdown_remaining);
+                        cdLabel.innerText = `Wechsel zu ${target} in ${secs}s …`;
+                        cdFill.className  = 'countdown-bar-fill ' +
+                            (data.pending_target === 'safe' ? 'fill-safe' : 'fill-unsafe');
+                        cdFill.style.width = pct + '%';
+                        cdContainer.style.display = 'block';
+                    } else {
+                        cdContainer.style.display = 'none';
+                    }
+
                     document.getElementById('conditionVal').innerText = data.status;
                     document.getElementById('confidenceVal').innerText = data.confidence + '%';
                     document.getElementById('lastUpdate').innerText = data.last_update;
@@ -278,13 +332,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
                     // Render labels once (they don't change at runtime)
                     renderLabels(data.labels, data.safe_conditions);
-                    
+
                     const timestampMs = new Date().getTime();
                     const newFrameUrl = 'latest.jpg?t=' + timestampMs;
-                    
+
                     // Update main feed
                     document.getElementById('feed').src = newFrameUrl;
-                    
+
                     // Update modal background image if it is open so it stays live
                     if (modal.style.display === "block") {
                         modalImg.src = newFrameUrl;
@@ -454,6 +508,7 @@ def main():
     # Import here to ensure the sys.path modification has taken effect
     try:
         from detect import CloudDetector, Config
+        import paho.mqtt.client as mqtt_lib
     except ImportError as e:
         logger.error(f"Failed to import detect module from {os.getcwd()}: {e}")
         time.sleep(10)
@@ -466,7 +521,29 @@ def main():
     # IMPORTANT: We need to enable `homeassistant` discovery mode
     # We will pass a dummy device_id to satisfy the Config requirements
     device_id = "addon_instance"
-    
+
+    # Build and connect the MQTT client manually so we can set:
+    #   1. LWT for the availability topic  (existing)
+    #   2. LWT for the is_safe state topic (NEW) → broker auto-publishes 'false' on crash/disconnect
+    is_safe_state_topic = f"{mqtt_discovery_prefix}/sensor/clouddetect_{device_id}/is_safe/state"
+    availability_topic  = f"{mqtt_discovery_prefix}/sensor/clouddetect_{device_id}/availability"
+    pre_built_mqtt_client = None
+    if mqtt_broker and mqtt_broker.lower() not in ('none', 'null', ''):
+        try:
+            pre_built_mqtt_client = mqtt_lib.Client()
+            if mqtt_user and mqtt_password:
+                pre_built_mqtt_client.username_pw_set(mqtt_user, mqtt_password)
+            # LWT 1: availability → 'offline' (existing behaviour, kept here)
+            pre_built_mqtt_client.will_set(availability_topic, "offline", retain=True)
+            # LWT 2: is_safe → 'false'  (NEW: ensures safe stays false if add-on dies unexpectedly)
+            pre_built_mqtt_client.will_set(is_safe_state_topic, "false", retain=True)
+            pre_built_mqtt_client.connect(mqtt_broker, mqtt_port)
+            pre_built_mqtt_client.loop_start()
+            logger.info(f"Connected to MQTT broker at {mqtt_broker}:{mqtt_port} (with LWT for is_safe)")
+        except Exception as e:
+            logger.error(f"Failed to connect to MQTT broker: {e}")
+            pre_built_mqtt_client = None
+
     config = Config(
         image_url=camera_url,
         model_path=str(SHARE_DIR / "keras_model.h5"),
@@ -483,10 +560,11 @@ def main():
         device_name=device_name,
         device_id=device_id
     )
-    
+
     logger.info("Initializing original CloudDetector...")
     try:
-        detector = CloudDetector(config)
+        # Pass pre_built_mqtt_client so CloudDetector reuses it (incl. our LWT settings)
+        detector = CloudDetector(config, mqtt_client=pre_built_mqtt_client)
         if auth_headers:
             logger.info("Injecting authorization headers into detector session")
             detector.session.headers.update(auth_headers)
@@ -549,11 +627,21 @@ def main():
         logger.error(f"Failed to start HTTP server: {e}")
 
     logger.info(f"Starting main detection loop (Interval: {scan_interval}s)")
-    
+
+    # Publish initial UNSAFE state to overwrite any retained 'true' from a previous run.
+    # This ensures HA never shows stale 'safe' while the wait time is still running.
+    if detector.mqtt_client:
+        detector.mqtt_client.publish(
+            f"{mqtt_discovery_prefix}/sensor/clouddetect_{device_id}/is_safe/state",
+            "false",
+            retain=True
+        )
+        logger.info("Published initial 'false' state to MQTT (safety default until wait time elapses)")
+
     # State tracking variables for Safe/Unsafe Wait Time logic
-    reported_is_safe = None
+    reported_is_safe = None      # Last state actually published to MQTT / shown in badge
     current_condition = None
-    condition_start_time = 0
+    condition_start_time = time.time()  # Start from now so wait_time is not skipped on first run
     last_logged_wait_state = None
     
     while True:
@@ -628,10 +716,24 @@ def main():
             # Update WebUI global state
             with STATE_LOCK:
                 GLOBAL_STATE["status"] = result.get("class_name", "Unknown")
-                GLOBAL_STATE["is_safe"] = is_safe
+                # Badge shows the last *confirmed/reported* state, not the raw detection.
+                # reported_is_safe is None only before the first publish; default to False (unsafe).
+                GLOBAL_STATE["is_safe"] = reported_is_safe if reported_is_safe is not None else False
                 GLOBAL_STATE["confidence"] = result.get("confidence_score", 0.0)
                 GLOBAL_STATE["time"] = result.get("Detection Time (Seconds)", 0.0)
                 GLOBAL_STATE["last_update"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                # Countdown state for WebUI
+                elapsed = now - condition_start_time
+                if elapsed < wait_time:
+                    GLOBAL_STATE["is_pending"] = True
+                    GLOBAL_STATE["pending_target"] = "safe" if is_safe else "unsafe"
+                    GLOBAL_STATE["countdown_total"] = wait_time
+                    GLOBAL_STATE["countdown_remaining"] = max(0.0, wait_time - elapsed)
+                else:
+                    GLOBAL_STATE["is_pending"] = False
+                    GLOBAL_STATE["countdown_remaining"] = 0
+                    GLOBAL_STATE["countdown_total"] = 0
+                    GLOBAL_STATE["pending_target"] = None
             
         except Exception as e:
             logger.error(f"Error during detection loop: {e}")
