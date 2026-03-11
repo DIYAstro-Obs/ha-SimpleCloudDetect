@@ -40,4 +40,4 @@ configuration:
     description: "Only switch to UNSAFE if clouds are detected for this many seconds in a row."
   safe_conditions:
     name: "Safe Conditions (Important!)"
-    description: "Type and press Enter to add safe cloud labels. Valid options are: 'Clear', 'Wisps', 'Overcast', 'Rain'."
+    description: "Type the label exactly as it appears in your labels.txt and press Enter to add it. Available labels and their current Safe/Unsafe status are shown in the add-on's Web UI."

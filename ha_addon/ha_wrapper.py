@@ -33,7 +33,9 @@ GLOBAL_STATE = {
     "is_safe": False,
     "confidence": 0.0,
     "time": "0.0",
-    "last_update": "System initializing"
+    "last_update": "System initializing",
+    "labels": [],
+    "safe_conditions": []
 }
 STATE_LOCK = threading.Lock()
 
@@ -106,6 +108,38 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .stat-label { font-size: 0.8rem; color: #aaa; text-transform: uppercase; display:block; margin-bottom: 5px;}
         .stat-value { font-size: 1.2rem; font-weight: bold; }
         .footer { margin-top: 30px; font-size: 0.8rem; color: #888; line-height: 1.5; }
+        .labels-section {
+            margin-top: 20px;
+            text-align: left;
+        }
+        .labels-title {
+            font-size: 0.8rem;
+            color: #aaa;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+        .label-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            padding: 8px 14px;
+            margin-bottom: 6px;
+            font-size: 0.95rem;
+        }
+        .label-name { font-weight: 500; }
+        .label-badge {
+            font-size: 0.75rem;
+            font-weight: bold;
+            padding: 3px 10px;
+            border-radius: 20px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .label-safe   { background: rgba(46, 204, 113, 0.2); color: #2ecc71; border: 1px solid #2ecc71; }
+        .label-unsafe { background: rgba(231, 76, 60,  0.2); color: #e74c3c; border: 1px solid #e74c3c; }
         
         /* Modal Styles */
         .modal {
@@ -162,6 +196,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </div>
         </div>
         
+        <div class="labels-section">
+            <div class="labels-title">Model Labels</div>
+            <div id="labelsContainer"></div>
+        </div>
+
         <div class="footer">
             Last Update: <span id="lastUpdate">-</span><br>
             Processing Time: <span id="timeVal">-</span>s
@@ -189,6 +228,28 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         span.onclick = function() { modal.style.display = "none"; }
         modal.onclick = function(e) { if(e.target === modal) modal.style.display = "none"; }
 
+        let labelsRendered = false;
+
+        function renderLabels(labels, safeConditions) {
+            if (labelsRendered || !labels || labels.length === 0) return;
+            const container = document.getElementById('labelsContainer');
+            container.innerHTML = '';
+            labels.forEach(label => {
+                const isSafe = safeConditions.some(
+                    sc => label.toLowerCase().includes(sc.toLowerCase())
+                );
+                const row = document.createElement('div');
+                row.className = 'label-row';
+                row.innerHTML = `
+                    <span class="label-name">${label}</span>
+                    <span class="label-badge ${isSafe ? 'label-safe' : 'label-unsafe'}">
+                        ${isSafe ? 'SAFE' : 'UNSAFE'}
+                    </span>`;
+                container.appendChild(row);
+            });
+            labelsRendered = true;
+        }
+
         function updateData() {
             fetch('api/state')
                 .then(r => r.json())
@@ -206,6 +267,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     document.getElementById('confidenceVal').innerText = data.confidence + '%';
                     document.getElementById('lastUpdate').innerText = data.last_update;
                     document.getElementById('timeVal').innerText = data.time;
+
+                    // Render labels once (they don't change at runtime)
+                    renderLabels(data.labels, data.safe_conditions);
                     
                     const timestampMs = new Date().getTime();
                     const newFrameUrl = 'latest.jpg?t=' + timestampMs;
@@ -373,7 +437,7 @@ def main():
     scan_interval = int(options.get("scan_interval", 60))
     safe_wait_time = int(options.get("safe_wait_time", 300))
     unsafe_wait_time = int(options.get("unsafe_wait_time", 0))
-    safe_conditions = options.get("safe_conditions", ["Clear", "Wisps"])
+    safe_conditions = options.get("safe_conditions", ["Clear"])
     device_name = options.get("device_name", "Cloud Detector")
     verify_ssl = options.get("verify_ssl", False)
     
@@ -420,6 +484,31 @@ def main():
     except Exception as e:
         logger.error(f"Failed to initialize CloudDetector: {e}")
         return
+
+    # Populate labels into GLOBAL_STATE once after detector is ready
+    raw_labels = [l.strip() for l in detector.class_names]
+    # Strip leading index number if present (e.g. "0 Clear" -> "Clear")
+    clean_labels = []
+    for lbl in raw_labels:
+        if " " in lbl and lbl.split(" ", 1)[0].isdigit():
+            clean_labels.append(lbl.split(" ", 1)[1])
+        else:
+            clean_labels.append(lbl)
+    with STATE_LOCK:
+        GLOBAL_STATE["labels"] = clean_labels
+        GLOBAL_STATE["safe_conditions"] = safe_conditions
+
+    # Warn if none of the safe_conditions match any label
+    matched = any(
+        any(sc.lower() in lbl.lower() for sc in safe_conditions)
+        for lbl in clean_labels
+    )
+    if not matched:
+        logger.warning(
+            f"None of the configured safe_conditions {safe_conditions} match "
+            f"any label in labels.txt {clean_labels}. "
+            "If you use a custom model, please update 'safe_conditions' in the add-on configuration!"
+        )
         
     # We need to manually register our extra `is_safe` boolean sensor
     # since it's not part of the standard `CloudDetector` class.
