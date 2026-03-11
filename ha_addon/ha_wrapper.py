@@ -335,9 +335,27 @@ def main():
     
     options = load_options()
     
-    camera_url = options.get("camera_url")
+    camera_url = options.get("camera_url") or ""
+    camera_entity = options.get("camera_entity") or ""
+    
+    auth_headers = {}
+    
+    if camera_entity:
+        # Auto-fix: add 'camera.' prefix if the user only entered the entity name
+        if not camera_entity.startswith("camera."):
+            camera_entity = f"camera.{camera_entity}"
+            logger.info(f"Auto-prefixed entity ID to: {camera_entity}")
+        logger.info(f"Using Home Assistant camera entity: {camera_entity}")
+        token = os.environ.get("SUPERVISOR_TOKEN")
+        if not token:
+            logger.error("SUPERVISOR_TOKEN not found! Cannot use camera_entity.")
+        else:
+            camera_url = f"http://supervisor/core/api/camera_proxy/{camera_entity}"
+            auth_headers = {"Authorization": f"Bearer {token}"}
+            logger.info(f"Set proxy URL: {camera_url}")
+
     if not camera_url:
-        logger.error("No camera_url configured! Please set it in the Add-on options.")
+        logger.error("No camera_url or camera_entity configured! Please set one in the Add-on options.")
         # While loop to keep add-on running to so it doesn't crash continuously on start 
         # while user configs the add-on
         while True:
@@ -395,6 +413,9 @@ def main():
     logger.info("Initializing original CloudDetector...")
     try:
         detector = CloudDetector(config)
+        if auth_headers:
+            logger.info("Injecting authorization headers into detector session")
+            detector.session.headers.update(auth_headers)
     except Exception as e:
         logger.error(f"Failed to initialize CloudDetector: {e}")
         return

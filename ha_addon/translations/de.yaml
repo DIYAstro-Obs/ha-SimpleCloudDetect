@@ -2,6 +2,9 @@ configuration:
   device_name:
     name: "Gerätename"
     description: "Der Name des Sensors in Home Assistant."
+  camera_entity:
+    name: "Kamera Entität"
+    description: "Optional: Eine HA Kamera-Entitäts-ID eingeben (z.B. camera.meine_kamera). Hat Vorrang vor der Kamera URL."
   camera_url:
     name: "Kamera URL"
     description: "Der direkte Link zum aktuellen Bild deiner All-Sky Kamera (z.B. http://192.168.1.10/image.jpg)."

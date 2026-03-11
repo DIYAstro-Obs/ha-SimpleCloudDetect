@@ -4,6 +4,7 @@ This add-on integrates the AI-based cloud detection from [chvvkumar/simpleCloudD
 
 ## Features
 
+- **Camera Entity Support**: Select your Home Assistant camera directly (no separate URL/password needed).
 - **AI Analysis**: Classification (Clear, Wisps, Overcast, Rain) using TensorFlow/Keras models.
 - **WebUI (Ingress)**: A dashboard accessible via the Home Assistant sidebar showing live images.
 - **Image View**: Click on the camera image in the dashboard to enlarge it in a modal view.
@@ -29,7 +30,8 @@ To install this add-on, add this GitHub repository to your Home Assistant instan
 
 Options are available under the **Configuration** tab:
 
-- `camera_url`: URL for your camera snapshot.
+- `camera_entity`: (Recommended) The Home Assistant camera entity ID (e.g., `camera.allsky`). If you only enter the name (e.g., `allsky`), the add-on will automatically add the `camera.` prefix. This option takes priority over `camera_url`.
+- `camera_url`: URL for your camera snapshot. This field is ignored if `camera_entity` is set.
 - `device_name`: Name for the device in Home Assistant (Default: "Cloud Detector").
 - `scan_interval`: Time in seconds between analyses (Default: 60s).
 - `safe_wait_time`: Seconds the sky must be clear before switching to "Safe" (Default: 300s).
