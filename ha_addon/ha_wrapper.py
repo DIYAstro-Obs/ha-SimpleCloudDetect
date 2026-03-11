@@ -674,12 +674,15 @@ def main():
                 # We have held the condition for long enough, we can report it
                 if reported_is_safe != is_safe:
                     reported_is_safe = is_safe
-                    if detector.mqtt_client:
-                        detector.mqtt_client.publish(
-                            f"{mqtt_discovery_prefix}/sensor/clouddetect_{device_id}/is_safe/state",
-                            str(reported_is_safe).lower()
-                        )
-                        logger.info(f"Published Is Safe state to MQTT: {reported_is_safe}")
+                    logger.info(f"Published Is Safe state change to MQTT: {reported_is_safe}")
+                # Always re-publish reported_is_safe on every loop iteration
+                # so external watchdogs (e.g. ASCOM Alpaca Safety) see regular updates
+                # and don't expire on a stable, unchanging state.
+                if detector.mqtt_client and reported_is_safe is not None:
+                    detector.mqtt_client.publish(
+                        f"{mqtt_discovery_prefix}/sensor/clouddetect_{device_id}/is_safe/state",
+                        str(reported_is_safe).lower()
+                    )
                 last_logged_wait_state = None # Reset log state once published
             else:
               # If time hasn't passed, we don't publish yet.
