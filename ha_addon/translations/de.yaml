@@ -41,3 +41,10 @@ configuration:
   safe_conditions:
     name: "Sichere Zustände (Wichtig!)"
     description: "Tippe das Label exakt wie in deiner labels.txt ein und drücke Enter. Die verfügbaren Labels und ihr Status (Safe/Unsafe) sind im Web-UI des Add-ons einsehbar."
+  mqtt_lwt_logic:
+    name: "MQTT Last Will (Sicherheit)"
+    description: "Verhalten bei Verbindungsabbruch oder Absturz (Standard: unsafe)."
+    select:
+      unsafe: "Unsafe (Sicherheits-Fokus)"
+      safe: "Safe"
+      none: "Keine Änderung"

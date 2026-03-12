@@ -440,8 +440,8 @@ def main():
     
     options = load_options()
     
-    camera_url = options.get("camera_url") or ""
-    camera_entity = options.get("camera_entity") or ""
+    camera_url = str(options.get("camera_url") or "")
+    camera_entity = str(options.get("camera_entity") or "")
     
     auth_headers = {}
     
@@ -468,7 +468,7 @@ def main():
         
     ensure_models()
     
-    mqtt_broker = options.get("mqtt_broker", "core-mosquitto")
+    mqtt_broker = str(options.get("mqtt_broker", "core-mosquitto"))
     mqtt_port = options.get("mqtt_port", 1883)
     mqtt_user = options.get("mqtt_user")
     mqtt_password = options.get("mqtt_password")
@@ -481,6 +481,7 @@ def main():
     safe_conditions = options.get("safe_conditions", [{"label": "Clear", "threshold": 50}])
     device_name = options.get("device_name", "Cloud Detector")
     verify_ssl = options.get("verify_ssl", False)
+    mqtt_lwt_logic = options.get("mqtt_lwt_logic", "unsafe")
     
     # Initialize the core cloud detection logic using the original Config dataclass
     # Import here to ensure the sys.path modification has taken effect
@@ -513,8 +514,12 @@ def main():
                 pre_built_mqtt_client.username_pw_set(mqtt_user, mqtt_password)
             # LWT 1: availability → 'offline' (existing behaviour, kept here)
             pre_built_mqtt_client.will_set(availability_topic, "offline", retain=True)
-            # LWT 2: is_safe → 'false'  (NEW: ensures safe stays false if add-on dies unexpectedly)
-            pre_built_mqtt_client.will_set(is_safe_state_topic, "false", retain=True)
+            # LWT 2: is_safe based on config
+            if mqtt_lwt_logic == "unsafe":
+                pre_built_mqtt_client.will_set(is_safe_state_topic, "false", retain=True)
+            elif mqtt_lwt_logic == "safe":
+                pre_built_mqtt_client.will_set(is_safe_state_topic, "true", retain=True)
+            
             pre_built_mqtt_client.connect(mqtt_broker, mqtt_port)
             pre_built_mqtt_client.loop_start()
             logger.info(f"Connected to MQTT broker at {mqtt_broker}:{mqtt_port} (with LWT for is_safe)")

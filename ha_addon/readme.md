@@ -38,6 +38,7 @@ Options are available under the **Configuration** tab:
 - `unsafe_wait_time`: Seconds before switching to "Unsafe" when clouds are detected (Default: 0s).
 - `safe_conditions`: A list of AI classes considered "Safe". Type the class name and press Enter. Valid options: `Clear`, `Wisps`, `Overcast`, `Rain`.
 - `mqtt_discovery_prefix`: Prefix for Auto-Discovery (Default: "homeassistant").
+- `mqtt_lwt_logic`: Behavior when the add-on disconnects or crashes. Options: `unsafe` (sets state to false), `safe` (sets state to true), `none` (keeps last state). Default: `unsafe`.
 
 ## Dashboard
 
@@ -61,3 +62,6 @@ You can use your own AI models by replacing the default files.
 ## Technical Details
 
 The add-on uses an internal HTTP server on port `8099` for Ingress. Default models are automatically downloaded from GitHub to `/share/simple_cloud_detect/` during the first startup if they are not already present.
+
+### MQTT Last Will (LWT)
+To ensure reliable status reporting, the add-on uses the MQTT LWT mechanism. If the add-on crashes or loses network, the MQTT broker will automatically update the `is_safe` sensor based on your `mqtt_lwt_logic` setting. This prevents Home Assistant from showing a stale "Safe" status if the monitoring loop stops.
