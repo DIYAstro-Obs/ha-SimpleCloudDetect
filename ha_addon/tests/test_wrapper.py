@@ -205,6 +205,10 @@ class WebServerTest(StateIsolatedTest):
         self.assertEqual(body[:2], b"\xff\xd8")
         self.assertEqual(list(self.tmp.glob("*.tmp")), [])
 
+    def test_page_credits_the_original_project(self):
+        _, body = self.get("")
+        self.assertIn(b"https://github.com/chvvkumar/simpleCloudDetect", body)
+
     def test_page_is_english(self):
         status, body = self.get("")
         self.assertEqual(status, 200)

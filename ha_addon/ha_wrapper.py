@@ -130,6 +130,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .stat-label { font-size: 0.8rem; color: #aaa; text-transform: uppercase; display:block; margin-bottom: 5px;}
         .stat-value { font-size: 1.2rem; font-weight: bold; }
         .footer { margin-top: 30px; font-size: 0.8rem; color: #888; line-height: 1.5; }
+        .footer a { color: #aaa; }
         .labels-section {
             margin-top: 20px;
             text-align: left;
@@ -240,7 +241,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         <div class="footer">
             Last Update: <span id="lastUpdate">-</span><br>
-            Processing Time: <span id="timeVal">-</span>s
+            Processing Time: <span id="timeVal">-</span>s<br>
+            Based on <a href="https://github.com/chvvkumar/simpleCloudDetect" target="_blank" rel="noopener">simpleCloudDetect</a> by chvvkumar
         </div>
     </div>
 
