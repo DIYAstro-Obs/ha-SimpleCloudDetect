@@ -8,10 +8,12 @@ import logging
 import sys
 import threading
 from pathlib import Path
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import paho.mqtt.client as mqtt
 import requests
+
+import mqtt_setup
+import safety_logic
 
 # We will import CloudDetector and Config after adjusting the sys.path in main()
 
@@ -39,9 +41,14 @@ GLOBAL_STATE = {
     "countdown_remaining": 0,
     "countdown_total": 0,
     "is_pending": False,
-    "pending_target": None
+    "pending_target": None,
+    "error": None
 }
 STATE_LOCK = threading.Lock()
+
+# Seconds of the last finished detection cycle and how long one may take; /api/state turns
+# 503 (Docker healthcheck fails) when the loop has started but stopped completing cycles.
+LOOP_HEARTBEAT = {"last": None, "timeout": None}
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
@@ -155,6 +162,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .label-safe   { background: rgba(46, 204, 113, 0.2); color: #2ecc71; border: 1px solid #2ecc71; }
         .label-unsafe { background: rgba(231, 76, 60,  0.2); color: #e74c3c; border: 1px solid #e74c3c; }
+        .error-banner {
+            display: none;
+            margin-bottom: 20px;
+            padding: 10px 14px;
+            border-radius: 10px;
+            background: rgba(231, 76, 60, 0.15);
+            border: 1px solid #e74c3c;
+            color: #e74c3c;
+            font-size: 0.9rem;
+        }
         
         /* Modal Styles */
         .modal {
@@ -199,6 +216,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <img id="feed" class="camera-feed" src="latest.jpg" alt="Camera Feed" title="Click to enlarge">
         </div>
         <div id="statusBadge" class="status-badge safe">Loading...</div>
+        <div id="errorBanner" class="error-banner"></div>
 
         <div id="countdownContainer" class="countdown-container">
             <div id="countdownLabel" class="countdown-label"></div>
@@ -254,24 +272,30 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const container = document.getElementById('labelsContainer');
             container.innerHTML = '';
             labels.forEach(label => {
-                // safeConditions is now a list of {label, threshold} objects
+                // safeConditions is a list of {label, threshold}; labels match exactly, ignoring case
                 const matchingSc = safeConditions.find(
-                    sc => typeof sc === 'object'
-                        ? label.toLowerCase().includes(sc.label.toLowerCase())
-                        : label.toLowerCase().includes(sc.toLowerCase())
+                    sc => sc.label.trim().toLowerCase() === label.trim().toLowerCase()
                 );
                 const isSafe = !!matchingSc;
-                const threshold = isSafe && typeof matchingSc === 'object' ? matchingSc.threshold : null;
                 const row = document.createElement('div');
                 row.className = 'label-row';
-                row.innerHTML = `
-                    <span class="label-name">${label}</span>
-                    <span style="display:flex;align-items:center;gap:8px;">
-                        ${isSafe && threshold !== null ? `<span style="font-size:0.75rem;color:#aaa;">\u2265${threshold}%</span>` : ''}
-                        <span class="label-badge ${isSafe ? 'label-safe' : 'label-unsafe'}">
-                            ${isSafe ? 'SAFE' : 'UNSAFE'}
-                        </span>
-                    </span>`;
+                const name = document.createElement('span');
+                name.className = 'label-name';
+                name.textContent = label;
+                const right = document.createElement('span');
+                right.style.cssText = 'display:flex;align-items:center;gap:8px;';
+                if (isSafe) {
+                    const limit = document.createElement('span');
+                    limit.style.cssText = 'font-size:0.75rem;color:#aaa;';
+                    limit.textContent = '\u2265' + matchingSc.threshold + '%';
+                    right.appendChild(limit);
+                }
+                const badge = document.createElement('span');
+                badge.className = 'label-badge ' + (isSafe ? 'label-safe' : 'label-unsafe');
+                badge.textContent = isSafe ? 'SAFE' : 'UNSAFE';
+                right.appendChild(badge);
+                row.appendChild(name);
+                row.appendChild(right);
                 container.appendChild(row);
             });
             labelsRendered = true;
@@ -297,10 +321,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     if (data.is_pending && data.countdown_total > 0) {
                         const target = data.pending_target === 'safe' ? 'SAFE' : 'UNSAFE';
                         const secs   = Math.ceil(data.countdown_remaining);
-                        cdLabel.innerText = `Wechsel zu ${target} in ${secs}s …`;
+                        cdLabel.innerText = `Switching to ${target} in ${secs}s …`;
                         cdContainer.style.display = 'block';
                     } else {
                         cdContainer.style.display = 'none';
+                    }
+
+                    const banner = document.getElementById('errorBanner');
+                    if (data.error || data.stale) {
+                        banner.innerText = data.error || 'The detection loop has stopped responding.';
+                        banner.style.display = 'block';
+                    } else {
+                        banner.style.display = 'none';
                     }
 
                     document.getElementById('conditionVal').innerText = data.status;
@@ -331,10 +363,28 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>"""
 
+def loop_is_stale(now):
+    """True if the detection loop has started but has not finished a cycle in time."""
+    last, timeout = LOOP_HEARTBEAT["last"], LOOP_HEARTBEAT["timeout"]
+    return last is not None and timeout is not None and now - last > timeout
+
+
+def set_state(**fields):
+    with STATE_LOCK:
+        GLOBAL_STATE.update(fields)
+
+
+def save_latest_image(image):
+    """Write the picture for the web UI atomically, so a browser never gets half a file."""
+    tmp_path = TMP_IMAGE_PATH.with_name(TMP_IMAGE_PATH.name + ".tmp")
+    image.save(tmp_path, "JPEG")
+    os.replace(tmp_path, TMP_IMAGE_PATH)
+
+
 class WebUIHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
-        
+
     def do_GET(self):
         try:
             path = self.path.split('?')[0].strip('/')
@@ -344,23 +394,26 @@ class WebUIHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(HTML_TEMPLATE.encode('utf-8'))
             elif path == 'api/state':
-                self.send_response(200)
+                with STATE_LOCK:
+                    state = dict(GLOBAL_STATE)
+                    stale = loop_is_stale(time.time())
+                state["stale"] = stale
+                # 503 makes the Docker healthcheck (curl -f) fail when the detection loop hangs.
+                self.send_response(503 if stale else 200)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                with STATE_LOCK:
-                    state_json = json.dumps(GLOBAL_STATE)
-                self.wfile.write(state_json.encode('utf-8'))
+                self.wfile.write(json.dumps(state).encode('utf-8'))
             elif path == 'latest.jpg':
-                img_path = TMP_IMAGE_PATH
-                if img_path.exists():
+                try:
+                    data = TMP_IMAGE_PATH.read_bytes()
+                except FileNotFoundError:
+                    self.send_error(404, "Image not generated yet")
+                else:
                     self.send_response(200)
                     self.send_header('Content-type', 'image/jpeg')
                     self.send_header('Cache-Control', 'no-store, must-revalidate')
                     self.end_headers()
-                    with open(img_path, 'rb') as f:
-                        self.wfile.write(f.read())
-                else:
-                    self.send_error(404, "Image not generated yet")
+                    self.wfile.write(data)
             else:
                 self.send_error(404)
         except Exception as e:
@@ -385,40 +438,54 @@ def load_options():
         }
 
 def download_file(url, destination):
-    """Download a file from an URL to a destination path"""
+    """Download a file from an URL. It only appears under its final name when it is complete,
+    so an interrupted download is never mistaken for a model."""
+    part = destination.with_name(destination.name + ".part")
     try:
         logger.info(f"Downloading {url} to {destination}...")
-        response = requests.get(url, timeout=30, stream=True)
-        response.raise_for_status()
-        with open(destination, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
+        with requests.get(url, timeout=30, stream=True) as response:
+            response.raise_for_status()
+            written = 0
+            with open(part, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    written += len(chunk)
+            expected = response.headers.get("Content-Length")
+            # With Content-Encoding the length on the wire differs from the decoded size.
+            if written == 0 or (expected and not response.headers.get("Content-Encoding")
+                                and written != int(expected)):
+                raise IOError(f"incomplete download ({written} of {expected} bytes)")
+        os.replace(part, destination)
         logger.info(f"Successfully downloaded {destination}")
         return True
     except Exception as e:
         logger.error(f"Failed to download {url}: {e}")
+        try:
+            part.unlink()
+        except FileNotFoundError:
+            pass
         return False
 
 def ensure_models():
     """Ensure Keras model and labels exist in HA's /share directory"""
     SHARE_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     # Base URLs for downloads
     REPO_RAW_URL = "https://raw.githubusercontent.com/chvvkumar/simpleCloudDetect/main"
-    
+
     files_to_check = [
         ("keras_model.h5", f"{REPO_RAW_URL}/keras_model.h5"),
         ("labels.txt", f"{REPO_RAW_URL}/labels.txt")
     ]
-    
+
     for filename, download_url in files_to_check:
         dest_path = SHARE_DIR / filename
         app_path = APP_DIR / filename
-        
+
         if dest_path.exists():
             logger.info(f"Using existing {filename} at {dest_path}")
             continue
-            
+
         # If not in /share, try to copy from /app
         if app_path.exists():
             logger.info(f"Copying default {filename} from {app_path} to {dest_path}")
@@ -431,20 +498,60 @@ def ensure_models():
                 # We don't exit here, maybe the user manually places it or it's a transient network error
                 # detect.py will fail later anyway if the file is missing when loading the model
 
+    # The Docker image does this in start_services.sh, which the add-on bypasses. Models exported
+    # from Teachable Machine carry a "groups" attribute that TensorFlow 2.18 / Keras 3 rejects.
+    model_path = SHARE_DIR / "keras_model.h5"
+    if model_path.exists():
+        try:
+            from convert import convert_model
+            convert_model(str(model_path))
+        except Exception as e:
+            logger.warning(f"Could not check {model_path} for the 'groups' attribute: {e}")
+
+
+def start_web_server():
+    """Serve the Ingress WebUI. Started first, so it answers while the model is still loading."""
+    try:
+        httpd = ThreadingHTTPServer(('0.0.0.0', 8099), WebUIHandler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        logger.info("Internal HTTP server for the Ingress WebUI listening on port 8099")
+    except Exception as e:
+        logger.error(f"Failed to start HTTP server: {e}")
+
+
+def publish_is_safe_config(mqtt_client, device_info, availability_topic, prefix, device_id):
+    """Discovery config of the extra 'Is Safe' sensor, which CloudDetector does not know about."""
+    safety_config = {
+        "name": "Is Safe",
+        "unique_id": f"clouddetect_{device_id}_is_safe",
+        "state_topic": f"{prefix}/sensor/clouddetect_{device_id}/is_safe/state",
+        "availability_topic": availability_topic,
+        "icon": "mdi:shield-check",
+        "force_update": True,
+        "device": device_info
+    }
+    mqtt_client.publish(
+        f"{prefix}/sensor/clouddetect_{device_id}/is_safe/config",
+        json.dumps(safety_config),
+        retain=True
+    )
+
+
 def main():
     logger.info("Starting simpleCloudDetect Native Home Assistant Add-on Wrapper")
-    
+
     # Change working directory to /app so detect.py and components are in path
     os.chdir(APP_DIR)
     sys.path.append(str(APP_DIR))
-    
+
     options = load_options()
-    
+    start_web_server()
+
     camera_url = str(options.get("camera_url") or "")
     camera_entity = str(options.get("camera_entity") or "")
-    
+
     auth_headers = {}
-    
+
     if camera_entity:
         # Auto-fix: add 'camera.' prefix if the user only entered the entity name
         if not camera_entity.startswith("camera."):
@@ -460,29 +567,41 @@ def main():
             logger.info(f"Set proxy URL: {camera_url}")
 
     if not camera_url:
-        logger.error("No camera_url or camera_entity configured! Please set one in the Add-on options.")
-        # While loop to keep add-on running to so it doesn't crash continuously on start 
+        message = "No camera_url or camera_entity configured! Please set one in the Add-on options."
+        logger.error(message)
+        set_state(status="Not configured", error=message)
+        # While loop to keep add-on running to so it doesn't crash continuously on start
         # while user configs the add-on
         while True:
             time.sleep(60)
-        
+
     ensure_models()
-    
+
     mqtt_broker = str(options.get("mqtt_broker", "core-mosquitto"))
     mqtt_port = options.get("mqtt_port", 1883)
-    mqtt_user = options.get("mqtt_user")
-    mqtt_password = options.get("mqtt_password")
+    mqtt_user = options.get("mqtt_user") or None
+    mqtt_password = options.get("mqtt_password") or None
     mqtt_topic = options.get("mqtt_topic", "simpleclouddetect/state")
     mqtt_discovery_prefix = options.get("mqtt_discovery_prefix", "homeassistant")
     scan_interval = int(options.get("scan_interval", 60))
     safe_wait_time = int(options.get("safe_wait_time", 300))
     unsafe_wait_time = int(options.get("unsafe_wait_time", 0))
-    # safe_conditions is now a list of dicts: [{"label": "Clear", "threshold": 50}, ...]
-    safe_conditions = options.get("safe_conditions", [{"label": "Clear", "threshold": 50}])
+    # safe_conditions is a list of dicts: [{"label": "Clear", "threshold": 50}, ...]
+    safe_conditions, problems = safety_logic.parse_safe_conditions(
+        options.get("safe_conditions", [{"label": "Clear", "threshold": 50}]))
+    for problem in problems:
+        logger.warning(f"safe_conditions: {problem}")
     device_name = options.get("device_name", "Cloud Detector")
     verify_ssl = options.get("verify_ssl", False)
     mqtt_lwt_logic = options.get("mqtt_lwt_logic", "unsafe")
-    
+
+    if not mqtt_user and not mqtt_password:
+        # The Supervisor hands the broker login to add-ons that declare `services: mqtt:need`.
+        mqtt_user, mqtt_password = mqtt_setup.supervisor_mqtt_credentials(
+            os.environ.get("SUPERVISOR_TOKEN"), requests.get)
+        if mqtt_user:
+            logger.info("Using the MQTT credentials of the Supervisor's MQTT service")
+
     # Initialize the core cloud detection logic using the original Config dataclass
     # Import here to ensure the sys.path modification has taken effect
     try:
@@ -501,31 +620,37 @@ def main():
     # We will pass a dummy device_id to satisfy the Config requirements
     device_id = "addon_instance"
 
-    # Build and connect the MQTT client manually so we can set:
-    #   1. LWT for the availability topic  (existing)
-    #   2. LWT for the is_safe state topic (NEW) → broker auto-publishes 'false' on crash/disconnect
     is_safe_state_topic = f"{mqtt_discovery_prefix}/sensor/clouddetect_{device_id}/is_safe/state"
     availability_topic  = f"{mqtt_discovery_prefix}/sensor/clouddetect_{device_id}/availability"
-    pre_built_mqtt_client = None
+
+    # Filled in once the detector exists; announce() runs from paho's network thread.
+    runtime = {"detector": None, "tracker": None, "initial_state_sent": False}
+
+    def announce():
+        """Discovery, availability and the initial 'false' go out on every (re)connect."""
+        detector = runtime["detector"]
+        client = detector.mqtt_client if detector else None
+        if client is None or not client.is_connected():
+            return
+        if detector.ha_discovery:
+            detector.ha_discovery.publish_discovery_configs()
+            publish_is_safe_config(client, detector.ha_discovery.get_device_info(),
+                                   detector.ha_discovery.availability_topic,
+                                   mqtt_discovery_prefix, device_id)
+        if not runtime["initial_state_sent"]:
+            # Overwrite any retained 'true' from a previous run, so HA never shows a stale
+            # 'safe' while the wait time is still running.
+            client.publish(is_safe_state_topic, "false", retain=True)
+            runtime["initial_state_sent"] = True
+            logger.info("Published initial 'false' state to MQTT (safety default until wait time elapses)")
+        elif runtime["tracker"] is not None and runtime["tracker"].reported is not None:
+            client.publish(is_safe_state_topic, str(runtime["tracker"].reported).lower())
+
+    mqtt_client = None
     if mqtt_broker and mqtt_broker.lower() not in ('none', 'null', ''):
-        try:
-            pre_built_mqtt_client = mqtt_lib.Client()
-            if mqtt_user and mqtt_password:
-                pre_built_mqtt_client.username_pw_set(mqtt_user, mqtt_password)
-            # LWT 1: availability → 'offline' (existing behaviour, kept here)
-            pre_built_mqtt_client.will_set(availability_topic, "offline", retain=True)
-            # LWT 2: is_safe based on config
-            if mqtt_lwt_logic == "unsafe":
-                pre_built_mqtt_client.will_set(is_safe_state_topic, "false", retain=True)
-            elif mqtt_lwt_logic == "safe":
-                pre_built_mqtt_client.will_set(is_safe_state_topic, "true", retain=True)
-            
-            pre_built_mqtt_client.connect(mqtt_broker, mqtt_port)
-            pre_built_mqtt_client.loop_start()
-            logger.info(f"Connected to MQTT broker at {mqtt_broker}:{mqtt_port} (with LWT for is_safe)")
-        except Exception as e:
-            logger.error(f"Failed to connect to MQTT broker: {e}")
-            pre_built_mqtt_client = None
+        mqtt_client = mqtt_setup.build_client(
+            mqtt_lib, mqtt_broker, mqtt_port, mqtt_user, mqtt_password, mqtt_lwt_logic,
+            availability_topic, is_safe_state_topic, announce)
 
     config = Config(
         image_url=camera_url,
@@ -546,14 +671,17 @@ def main():
 
     logger.info("Initializing original CloudDetector...")
     try:
-        # Pass pre_built_mqtt_client so CloudDetector reuses it (incl. our LWT settings)
-        detector = CloudDetector(config, mqtt_client=pre_built_mqtt_client)
+        # Pass the client so CloudDetector reuses it (incl. our Last Will and reconnect handler)
+        detector = CloudDetector(config, mqtt_client=mqtt_client)
         if auth_headers:
             logger.info("Injecting authorization headers into detector session")
             detector.session.headers.update(auth_headers)
     except Exception as e:
         logger.error(f"Failed to initialize CloudDetector: {e}")
+        logger.error(f"If the model file is damaged, delete {SHARE_DIR / 'keras_model.h5'} and restart the add-on.")
+        set_state(status="Error", error=f"Failed to initialize the detector: {e}")
         return
+    runtime["detector"] = detector
 
     # Populate labels into GLOBAL_STATE once after detector is ready
     raw_labels = [l.strip() for l in detector.class_names]
@@ -564,167 +692,102 @@ def main():
             clean_labels.append(lbl.split(" ", 1)[1])
         else:
             clean_labels.append(lbl)
-    with STATE_LOCK:
-        GLOBAL_STATE["labels"] = clean_labels
-        GLOBAL_STATE["safe_conditions"] = safe_conditions  # list of {label, threshold} dicts
+    set_state(
+        labels=clean_labels,
+        safe_conditions=[{"label": c.label, "threshold": c.threshold} for c in safe_conditions],
+    )
 
     # Warn if none of the safe_conditions labels match any model label
-    safe_labels_only = [sc["label"] for sc in safe_conditions if isinstance(sc, dict)]
-    matched = any(
-        any(sc.lower() in lbl.lower() for sc in safe_labels_only)
-        for lbl in clean_labels
-    )
-    if not matched:
+    if not any(c.label == lbl.strip().lower() for c in safe_conditions for lbl in clean_labels):
         logger.warning(
-            f"None of the configured safe_conditions {safe_labels_only} match "
+            f"None of the configured safe_conditions {[c.label for c in safe_conditions]} match "
             f"any label in labels.txt {clean_labels}. "
             "If you use a custom model, please update 'safe_conditions' in the add-on configuration!"
         )
-        
-    # We need to manually register our extra `is_safe` boolean sensor
-    # since it's not part of the standard `CloudDetector` class.
-    # The CloudDetector class already registers standard sensors (Status, Confidence, Time)
-    # and sets availability as "online".
-    if detector.ha_discovery and detector.mqtt_client:
-        device_info = detector.ha_discovery.get_device_info()
-        safety_config = {
-            "name": "Is Safe",
-            "unique_id": f"clouddetect_{device_id}_is_safe",
-            "state_topic": f"{mqtt_discovery_prefix}/sensor/clouddetect_{device_id}/is_safe/state",
-            "availability_topic": detector.ha_discovery.availability_topic,
-            "icon": "mdi:shield-check",
-            "force_update": True,
-            "device": device_info
-        }
-        detector.mqtt_client.publish(
-            f"{mqtt_discovery_prefix}/sensor/clouddetect_{device_id}/is_safe/config",
-            json.dumps(safety_config),
-            retain=True
-        )
-        logger.info("Published configuration for custom 'Is Safe' sensor.")
 
-    logger.info("Starting internal HTTP Server for Ingress WebUI on port 8099...")
-    try:
-        httpd = HTTPServer(('0.0.0.0', 8099), WebUIHandler)
-        threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    except Exception as e:
-        logger.error(f"Failed to start HTTP server: {e}")
+    # Publish discovery (also happens again on every reconnect) and the initial state
+    announce()
 
     logger.info(f"Starting main detection loop (Interval: {scan_interval}s)")
 
-    # Publish initial UNSAFE state to overwrite any retained 'true' from a previous run.
-    # This ensures HA never shows stale 'safe' while the wait time is still running.
-    if detector.mqtt_client:
-        detector.mqtt_client.publish(
-            f"{mqtt_discovery_prefix}/sensor/clouddetect_{device_id}/is_safe/state",
-            "false",
-            retain=True
-        )
-        logger.info("Published initial 'false' state to MQTT (safety default until wait time elapses)")
+    tracker = safety_logic.SafetyTracker(
+        safe_conditions, safe_wait_time, unsafe_wait_time,
+        safety_logic.stale_after_for(scan_interval), time.time())
+    runtime["tracker"] = tracker
+    with STATE_LOCK:
+        LOOP_HEARTBEAT["last"] = time.time()
+        LOOP_HEARTBEAT["timeout"] = 3 * scan_interval + 60
+    last_logged_target = None
+    last_ok = None
 
-    # State tracking variables for Safe/Unsafe Wait Time logic
-    reported_is_safe = None      # Last state actually published to MQTT / shown in badge
-    current_condition = None
-    condition_start_time = time.time()  # Start from now so wait_time is not skipped on first run
-    last_logged_wait_state = None
-    
     while True:
+        error = None
         try:
             # 1. Fetch image, run prediction, and evaluate result using original logic
             # This also internally publishes the standard stats via ha_discovery
             # Pass return_image=True so we can save and serve it
             result = detector.detect(return_image=True)
-            
+
             # Save latest image to RAM (/tmp) for the WebUI - avoids SD card writes
-            if 'image' in result:
+            image = result.pop('image', None)
+            if image is not None:
                 try:
-                    result['image'].save(TMP_IMAGE_PATH, "JPEG")
+                    save_latest_image(image)
                 except Exception as e:
                     logger.error(f"Failed to save latest image: {e}")
-                # Remove it before publishing over MQTT
-                del result['image']
+
+            # 2. Apply label, threshold and wait time logic
+            now = time.time()
+            changed = tracker.on_result(
+                str(result.get("class_name", "Unknown")).strip(), result.get("confidence_score", 0.0), now)
 
             # Publish standard results via original logic
-            detector.publish_result(result)
-            
-            # 2. Extract and format values for our extra logic
-            status = result.get("class_name", "Unknown").strip()
-            confidence = result.get("confidence_score", 0.0)  # already in percent (0-100)
-            
-            # 'is_safe' is True if the current status matches a safe_condition label
-            # AND the confidence score meets or exceeds that label's threshold.
-            lower_status = status.lower()
-            is_safe = False
-            for sc in safe_conditions:
-                if isinstance(sc, dict):
-                    safe_label = sc.get("label", "")
-                    threshold = sc.get("threshold", 50)
-                else:
-                    # Fallback for plain strings (shouldn't happen after migration)
-                    safe_label = sc
-                    threshold = 50
-                if safe_label.lower() in lower_status and confidence >= threshold:
-                    is_safe = True
-                    break
-            
-            # 3. Apply Safe / Unsafe Wait Time logic
+            try:
+                detector.publish_result(result)
+            except Exception as e:
+                logger.error(f"Failed to publish the detection result: {e}")
+        except Exception as e:
+            result = None
             now = time.time()
-            if current_condition != is_safe:
-                current_condition = is_safe
-                condition_start_time = now
-                logger.info(f"Condition changed to {'Safe' if is_safe else 'Unsafe'}. Waiting for {'safe' if is_safe else 'unsafe'} wait time...")
+            error = str(e) or type(e).__name__
+            logger.error(f"Error during detection loop: {error}")
+            changed = tracker.on_failure(now)
+            if changed:
+                logger.warning("No usable camera picture for too long, reporting unsafe")
 
-            wait_time = safe_wait_time if is_safe else unsafe_wait_time
+        if changed:
+            logger.info(f"Is Safe state change: {tracker.reported}")
+        snapshot = tracker.snapshot(now)
+        if snapshot["pending_target"] != last_logged_target:
+            last_logged_target = snapshot["pending_target"]
+            if last_logged_target:
+                logger.info(f"Reading is {last_logged_target}, waiting {snapshot['countdown_total']}s "
+                            "for it to hold before reporting it.")
 
-            if now - condition_start_time >= wait_time:
-                # We have held the condition for long enough, we can report it
-                if reported_is_safe != is_safe:
-                    reported_is_safe = is_safe
-                    logger.info(f"Published Is Safe state change to MQTT: {reported_is_safe}")
-                # Always re-publish reported_is_safe on every loop iteration
-                # so external watchdogs (e.g. ASCOM Alpaca Safety) see regular updates
-                # and don't expire on a stable, unchanging state.
-                if detector.mqtt_client and reported_is_safe is not None:
-                    detector.mqtt_client.publish(
-                        f"{mqtt_discovery_prefix}/sensor/clouddetect_{device_id}/is_safe/state",
-                        str(reported_is_safe).lower()
-                    )
-                last_logged_wait_state = None # Reset log state once published
-            else:
-              # If time hasn't passed, we don't publish yet.
-                remaining = int(wait_time - (now - condition_start_time))
-                if remaining > 0:
-                    if last_logged_wait_state != is_safe:
-                        logger.info(f"Delaying state publish... waiting for {'Safe' if is_safe else 'Unsafe'} state to stabilize.")
-                        last_logged_wait_state = is_safe
-                else:
-                    last_logged_wait_state = None
-            
-            # Update WebUI global state
-            with STATE_LOCK:
+        # Always publish the reported state, also while a change is still waiting, so external
+        # watchdogs (e.g. ASCOM Alpaca Safety) see regular updates and don't expire.
+        # Until the first state is released the safe default (false) is published.
+        reported = tracker.reported if tracker.reported is not None else False
+        if detector.mqtt_client:
+            detector.mqtt_client.publish(is_safe_state_topic, str(reported).lower())
+
+        # Update WebUI global state
+        with STATE_LOCK:
+            if result is not None:
                 GLOBAL_STATE["status"] = result.get("class_name", "Unknown")
-                # Badge shows the last *confirmed/reported* state, not the raw detection.
-                # reported_is_safe is None only before the first publish; default to False (unsafe).
-                GLOBAL_STATE["is_safe"] = reported_is_safe if reported_is_safe is not None else False
                 GLOBAL_STATE["confidence"] = result.get("confidence_score", 0.0)
                 GLOBAL_STATE["time"] = result.get("Detection Time (Seconds)", 0.0)
-                GLOBAL_STATE["last_update"] = time.strftime("%Y-%m-%d %H:%M:%S")
-                # Countdown state for WebUI
-                elapsed = now - condition_start_time
-                if elapsed < wait_time:
-                    GLOBAL_STATE["is_pending"] = True
-                    GLOBAL_STATE["pending_target"] = "safe" if is_safe else "unsafe"
-                    GLOBAL_STATE["countdown_total"] = wait_time
-                    GLOBAL_STATE["countdown_remaining"] = max(0.0, wait_time - elapsed)
-                else:
-                    GLOBAL_STATE["is_pending"] = False
-                    GLOBAL_STATE["countdown_remaining"] = 0
-                    GLOBAL_STATE["countdown_total"] = 0
-                    GLOBAL_STATE["pending_target"] = None
-            
-        except Exception as e:
-            logger.error(f"Error during detection loop: {e}")
-            
+                last_ok = time.strftime("%Y-%m-%d %H:%M:%S")
+                GLOBAL_STATE["last_update"] = last_ok
+                GLOBAL_STATE["error"] = None
+            else:
+                since = f"since {last_ok}" if last_ok else "yet"
+                GLOBAL_STATE["error"] = f"No new picture {since}: {error}"
+            # Badge shows the last *confirmed/reported* state, not the raw detection.
+            GLOBAL_STATE["is_safe"] = reported
+            GLOBAL_STATE.update(snapshot)
+            LOOP_HEARTBEAT["last"] = time.time()
+
         time.sleep(scan_interval)
 
 if __name__ == "__main__":

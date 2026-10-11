@@ -5,7 +5,7 @@ This add-on integrates the AI-based cloud detection from [chvvkumar/simpleCloudD
 ## Features
 
 - **Camera Entity Support**: Select your Home Assistant camera directly (no separate URL/password needed).
-- **AI Analysis**: Classification (Clear, Wisps, Overcast, Rain) using TensorFlow/Keras models.
+- **AI Analysis**: Classification of the sky (the labels of the model, e.g. Clear, Mostly Cloudy, Overcast, Rain) using TensorFlow/Keras models.
 - **WebUI (Ingress)**: A dashboard accessible via the Home Assistant sidebar showing live images.
 - **Image View**: Click on the camera image in the dashboard to enlarge it in a modal view.
 - **Safety Sensor**: A binary sensor (`is_safe`) classifies the sky status.
@@ -33,10 +33,11 @@ Options are available under the **Configuration** tab:
 - `camera_entity`: (Recommended) The Home Assistant camera entity ID (e.g., `camera.allsky`). If you only enter the name (e.g., `allsky`), the add-on will automatically add the `camera.` prefix. This option takes priority over `camera_url`.
 - `camera_url`: URL for your camera snapshot. This field is ignored if `camera_entity` is set.
 - `device_name`: Name for the device in Home Assistant (Default: "Cloud Detector").
-- `scan_interval`: Time in seconds between analyses (Default: 60s).
+- `scan_interval`: Time in seconds between analyses (5 to 3600, Default: 60s).
 - `safe_wait_time`: Seconds the sky must be clear before switching to "Safe" (Default: 300s).
 - `unsafe_wait_time`: Seconds before switching to "Unsafe" when clouds are detected (Default: 0s).
-- `safe_conditions`: A list of AI classes considered "Safe". Type the class name and press Enter. Valid options: `Clear`, `Wisps`, `Overcast`, `Rain`.
+- `safe_conditions`: A list of AI classes considered "Safe", each with a minimum confidence in percent. Type the class name exactly as it appears in `labels.txt` (upper/lower case is ignored). The labels of the default model are `Clear`, `Mostly Cloudy`, `Overcast`, `Partly Cloudy`, `Rain`, `Snow`.
+- `mqtt_user`, `mqtt_password`: Optional. If both are empty, the add-on uses the login of the Supervisor's MQTT service (the Mosquitto add-on).
 - `mqtt_discovery_prefix`: Prefix for Auto-Discovery (Default: "homeassistant").
 - `mqtt_lwt_logic`: Behavior when the add-on disconnects or crashes. Options: `unsafe` (sets state to false), `safe` (sets state to true), `none` (keeps last state). Default: `unsafe`.
 
@@ -64,4 +65,7 @@ You can use your own AI models by replacing the default files.
 The add-on uses an internal HTTP server on port `8099` for Ingress. Default models are automatically downloaded from GitHub to `/share/simple_cloud_detect/` during the first startup if they are not already present.
 
 ### MQTT Last Will (LWT)
-To ensure reliable status reporting, the add-on uses the MQTT LWT mechanism. If the add-on crashes or loses network, the MQTT broker will automatically update the `is_safe` sensor based on your `mqtt_lwt_logic` setting. This prevents Home Assistant from showing a stale "Safe" status if the monitoring loop stops.
+To ensure reliable status reporting, the add-on uses the MQTT LWT mechanism. MQTT allows one Last Will per connection, so `mqtt_lwt_logic` selects it: with `unsafe` or `safe` the broker sets the `is_safe` sensor to `false` or `true` when the add-on crashes or loses the network (the other sensors keep their last values); with `none` the broker marks all sensors of the device as unavailable instead.
+
+### Camera failures
+If no usable picture could be fetched for `max(3 x scan_interval, 120 s)`, the add-on reports `Is Safe` as `false` until pictures arrive again and the wait times have elapsed, and the dashboard shows the error. `Is Safe` is published every cycle, also while a change is still waiting for its wait time.

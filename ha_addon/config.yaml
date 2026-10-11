@@ -1,5 +1,5 @@
 name: "Simple Cloud Detect MQTT"
-version: "0.15"
+version: "0.22"
 slug: "simple_cloud_detect_mqtt"
 description: "AI-based cloud detection that publishes safety status to MQTT."
 url: "https://github.com/chvvkumar/simpleCloudDetect"
@@ -47,10 +47,10 @@ schema:
   mqtt_password: password?
   mqtt_topic: str
   mqtt_discovery_prefix: str
-  scan_interval: int
-  safe_wait_time: int
-  unsafe_wait_time: int
+  scan_interval: int(5,3600)
+  safe_wait_time: int(0,86400)
+  unsafe_wait_time: int(0,86400)
   safe_conditions:
     - label: str
-      threshold: int
+      threshold: int(0,100)
   mqtt_lwt_logic: list(unsafe|safe|none)
