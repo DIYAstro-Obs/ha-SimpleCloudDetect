@@ -2,6 +2,8 @@
 
 This add-on integrates the AI-based cloud detection from [chvvkumar/simpleCloudDetect](https://github.com/chvvkumar/simpleCloudDetect) into Home Assistant. It analyzes images from your All-Sky camera and reports the safety status ("Safe" or "Unsafe") via MQTT.
 
+This add-on is maintained independently of the original project and is not affiliated with it. It builds on the original's published Docker image (`chvvkumar/simpleclouddetect`) and downloads the default model from the original repository at the first start.
+
 ## Features
 
 - **Camera Entity Support**: Select your Home Assistant camera directly (no separate URL/password needed).
@@ -22,7 +24,7 @@ To install this add-on, add this GitHub repository to your Home Assistant instan
 
 1. In Home Assistant, navigate to **Settings -> Add-ons -> Add-on Store**.
 2. Click the three dots in the top right corner and select **Repositories**.
-3. Add the URL: `https://github.com/DiMoGro1/simpleCloudDetect`
+3. Add the URL: `https://github.com/DIYAstro-Obs/ha-SimpleCloudDetect`
 4. Close the dialog and search for **Simple Cloud Detect MQTT**.
 5. Click **Install**.
 
