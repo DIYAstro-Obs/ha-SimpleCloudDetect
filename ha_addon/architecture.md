@@ -129,3 +129,33 @@ After every (re)connect, for example after a restart of the broker, the add-on p
 - **Ingress**: The internal dashboard is proxied via the Home Assistant sidebar.
 - **MQTT service**: `services: mqtt:need` lets the add-on read the broker login from the Supervisor; the options `mqtt_user` and `mqtt_password` take priority.
 - **Watchdog**: The healthcheck marks a hung container unhealthy. `config.yaml` does not define a `watchdog:` URL, so automatic recovery depends on the Watchdog setting of the add-on in Home Assistant.
+
+## Contract with the Core Project
+
+The add-on does not contain the detection engine. It imports `detect.py` from the image of the original project and relies on the points below. They were checked against `chvvkumar/simpleCloudDetect` at commit `863a5fe` (2026-10-09). `ha_addon/tests/test_core_contract.py` checks them against a clone of the original project.
+
+| The add-on relies on | In the original | In the add-on |
+| :--- | :--- | :--- |
+| `Config` is a dataclass with 14 fields without defaults, created with keyword arguments | `detect.Config` | `ha_wrapper.main`: `Config(...)` |
+| `CloudDetector(config, mqtt_client=None)` uses a passed client unchanged; without a client and with a broker it connects itself and raises on failure | `CloudDetector.__init__`, `_setup_mqtt` | `ha_wrapper.main`: `CloudDetector(config, mqtt_client=...)` |
+| The model is loaded in `__init__` (`load_model(path, compile=False)`) and errors are raised | `CloudDetector._load_model` | `ha_wrapper.main`: error branch with the hint to delete the model file |
+| `class_names` are the lines of `labels.txt` including the line end, e.g. `0 Clear` | `CloudDetector._load_class_names` | `ha_wrapper.main`: strip and remove the leading index, **the same rule as `detect()` (duplicated)** |
+| `session` is a `requests.Session` used for HTTP(S) pictures (not for `file://`); headers set on it apply | `CloudDetector.__init__`, `_load_image` | `ha_wrapper.main`: Authorization header for the camera proxy |
+| `ha_discovery` is `None` unless a client exists and the mode is `homeassistant`; then it is a `HADiscoveryManager` with `get_device_info()`, `availability_topic` and `publish_discovery_configs()` (which also sends the retained "online") | `CloudDetector.__init__`, `HADiscoveryManager` | `ha_wrapper.main`: `announce()`, `publish_is_safe_config()` |
+| The availability topic is `{prefix}/sensor/clouddetect_{device_id}/availability` | `HADiscoveryManager.__init__`, `_setup_mqtt` | `ha_wrapper.main`: Last Will topic, **duplicated** |
+| `detect(return_image=True)` returns `class_name`, `confidence_score` (percent, two decimals), `Detection Time (Seconds)` and the picture under `image`; every failure is raised | `CloudDetector.detect` | detection loop in `ha_wrapper.main` |
+| `publish_result(result)` sends status, confidence and time through `ha_discovery`; `is_safe` is not part of the core | `CloudDetector.publish_result`, `HADiscoveryManager.publish_states` | detection loop in `ha_wrapper.main` |
+| `_setup_mqtt`, with its `on_connect` that re-announces after a reconnect, is skipped when a client is passed | `CloudDetector.__init__` | `mqtt_setup.build_client` has its own |
+| `convert.convert_model(path)` exists in `/app` and removes `"groups": 1,` from the model | `convert.py`, `Dockerfile` (COPY) | `ha_wrapper.ensure_models` |
+| The image has `WORKDIR /app` with `convert.py`, `detect.py`, `main.py`, `start_services.sh`, `alpaca/` and `templates/`, but **no** `keras_model.h5` or `labels.txt`; the user is `appuser`; `CMD` starts `start_services.sh`; `curl` is installed | `Dockerfile` | add-on `Dockerfile`: `USER root`, own `ENTRYPOINT`, `CMD` and `HEALTHCHECK` |
+| `socket.setdefaulttimeout(30)` is only in `detect.main()`, which the add-on does not call; picture requests have their own limits (5 s connect, 10 s read, 3 tries) | `main`, `_load_image` | heartbeat limit of `3 x scan_interval + 60 s` |
+
+### What breaks the add-on
+
+- A new required field in `Config` (all fields have no default and are passed by keyword).
+- A different format of the MQTT topics (`{prefix}/sensor/clouddetect_{device_id}/...`): the Last Will and the `Is Safe` sensor build them on their own.
+- A different rule for the label text (`0 Clear` becomes `Clear`): the add-on repeats it for the dashboard and for the label comparison.
+- Other keys in the result of `detect()`, or `detect()` no longer raising on errors (a camera failure would then not count as a failure).
+- Moved or renamed files in the image (`/app/detect.py`, `/app/convert.py`).
+
+Not a problem: the required environment variables of `Config.from_env` (the add-on builds `Config` itself) and the Alpaca server of the original (`main.py`, `alpaca/`), which the add-on does not start.
